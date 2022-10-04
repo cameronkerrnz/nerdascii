@@ -1,0 +1,57 @@
+FROM docker.io/library/python:3.9-bullseye
+
+WORKDIR /usr/src/app
+
+COPY requirements.txt ./
+
+RUN --mount=type=cache,target=/root/.cache python -m venv /venv/ \
+    && . /venv/bin/activate \
+    && python -m pip install --upgrade pip \
+    && pip install --no-cache-dir -r requirements.txt
+
+RUN mkdir -p /root/.u2net
+
+COPY cache/u2net.onnx /root/.u2net/u2net.onnx
+
+COPY app .
+
+COPY samples /
+COPY docker-entrypoint.sh /
+RUN chmod +x /docker-entrypoint.sh
+
+ENTRYPOINT "/docker-entrypoint.sh"
+
+# Biggest things that could still be improved in this version
+#
+# - We could reduce our demand on the Python PIP infrastructure by
+#   using BuildKit caching functionality
+#
+# - By handing the downloading of the model artefact (u2net.onnx)
+#   ourselves we've taken over reponsibility for checking for its
+#   freshness. We still have no idea around how its versioned, only
+#   that it was created by pytorch (if you decide to look closely
+#   at the file's internal structure)
+#
+# - I should prevent __pycache__ directory (eg. if it got imported
+#   during development) from getting added to either Git or docker
+#   build context (you'll see this improvement in .gitignore and
+#   .dockerignore) Have a look at https://gitignore.io to find
+#   something useful for whatever toolsets you are using.
+#
+# - When we use build.sh, we aren't doing anything particularly
+#   useful regarding image tagging. If this image was built using
+#   CI/CD (which it ought to), then the CI/CD system would
+#   typically pass in data from which you can determine suitable
+#   tags. We could just leave tagging as a concern the CI/CD
+#   environment should look after.
+#
+# - Oh, and YOWZERS! We haven't even suitably contrained the
+#   version on rembg that we use in requirements.txt
+#   According to a 'pip freeze' after it installs, it currently
+#   gets version 2.0.5, so if we ASSUME sementic versioning we
+#   should be good to say rembg~2.0.25 ... however, if we
+#   build this same container image again in the future, it might
+#   well be a later version. The lesson: builds are rarely as
+#   repeatable as you might think at first; that's one major
+#   reason why we want production environments to be the same
+#   container image as was used in testing.

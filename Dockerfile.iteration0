@@ -1,0 +1,27 @@
+FROM python
+
+WORKDIR /usr/src/app
+
+COPY requirements.txt ./
+COPY app .
+
+RUN python -m venv /venv/ \
+    && . /venv/bin/activate \
+    && python -m pip install --upgrade pip \
+    && pip install --no-cache-dir -r requirements.txt
+
+RUN mkdir -p /root/.u2net
+COPY https://drive.google.com/uc?id=1tCU5MM1LhRgGou5OpmpjBQbSrYIUoYab /root/.u2net/u2net.onnx
+
+COPY samples /
+COPY docker-entrypoint.sh /
+
+ENTRYPOINT "/docker-entrypoint.sh"
+
+# Biggest things that are not great about this version:
+#
+# - What version of Python are we using?
+# - We rebuild the Python virtual environment (lots of depenedencies) every time the app/ or requirements.txt change
+# - We redown the the (fairly large) machine-learning model that the image background removal wants every time
+# - If we build this on Windows, we've addeda script, but it won't be executable
+# - While it can be useful... do we really need to put in a bunch of samples?

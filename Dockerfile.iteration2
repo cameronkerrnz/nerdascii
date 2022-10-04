@@ -1,0 +1,98 @@
+# syntax = docker/dockerfile:1.4
+
+# This iteration uses a few BuildKit features. Because we use things that are now
+# specific to a version of Docker, and not just any tool that understands the original
+# Dockerfile syntax, we need to say just what type of Dockerfile this is, hence the
+# 'syntax' structured comment on the first line.
+#
+# You'll also see other BuildKit features:
+#   - RUN --mount=...
+#   - Heredoc syntax (<<EOF)
+#
+# Later we shall also see multi-arch builds. I haven't shown multi-stage builds here though.
+
+FROM docker.io/library/python:3.9-bullseye
+
+WORKDIR /usr/src/app
+
+COPY requirements.txt ./
+
+RUN --mount=type=cache,target=/root/.cache/pip \
+    python -m venv /venv/ \
+    && . /venv/bin/activate \
+    && python -m pip install --upgrade pip \
+    && pip install -r requirements.txt
+
+# When rembg runs, it will detect whether or not the file is cached, and downoad it of not.
+# So, we could just create a very simple script that will trigger this, that way we don't
+# need to concern ourselves with the internal logic of rembg, and is thus more maintainable.
+#
+# Since rembg library also provides a CLI tool, we can trigger the download fairly easily.
+# I don't need it to actually succeed at processing an image, although I'm kinda surprised
+# this doesn't error (because 'p' tells it to look for a path/directory of images, and
+# /dev/null is not a directory.
+#
+# But it does cause the image to be downloaded to /root/.u2net/u2net.onnx; we'd like to
+# be nice to the people offering these files; and it would make our own build infrastructure
+# less strained if we cache that big download.
+#
+# But if were were to use that --mount=type=cache,target=/root/.u2net/ trick, then the
+# contents of the directory would not stay in the container image, so we instead use
+# a cache and copy it in/out.
+#
+# Oh, and you'd be pleased to see this new heredoc syntax; finally, no more awkward
+# and error-prone backslashing and &&; just remember to use 'set -eu' so that your
+# command breaks as soon as a command returns an error or a variable is unset.
+# But you'll need a later Dockerfile syntax hint (1.4)
+#
+RUN --mount=type=cache,target=/root/.u2net-lookaside \
+<<EOF
+    set -eu
+    . /venv/bin/activate
+    if [ -r /root/.u2net-lookaside/u2net.onnx ]; then
+        cp /root/.u2net-lookaside/u2net.onnx /root/.u2net/u2net.onnx
+    fi
+    # give rembg an opportunity to check for freshness or download if needed
+    # then reseed the cache, but only if it succeeded
+    rembg p /dev/null /dev/null
+    # we ASSUME that rembg will return a failure response if download fails.
+    cp /root/.u2net/u2net.onnx /root/.u2net-lookaside/u2net.onnx
+EOF
+
+COPY app .
+
+COPY samples /
+COPY docker-entrypoint.sh /
+RUN chmod +x /docker-entrypoint.sh
+
+# Note: there is a big difference to using ENTRYPOINT as an array; mostly when
+# it comes to how additional arguments are presented.
+#
+# https://docs.docker.com/engine/reference/builder/#understand-how-cmd-and-entrypoint-interact
+#
+ENTRYPOINT ["/docker-entrypoint.sh"]
+
+# Biggest things that could still be improved in this version
+#
+# - We could reduce our demand on the Python PIP infrastructure by
+#   using BuildKit caching functionality
+#
+# - By handing the downloading of the model artefact (u2net.onnx)
+#   ourselves we've taken over reponsibility for checking for its
+#   freshness. We still have no idea around how its versioned, only
+#   that it was created by pytorch (if you decide to look closely
+#   at the file's internal structure)
+#
+# - I should prevent __pycache__ directory (eg. if it got imported
+#   during development) from getting added to either Git or docker
+#   build context (you'll see this improvement in .gitignore and
+#   .dockerignore) Have a look at https://gitignore.io to find
+#   something useful for whatever toolsets you are using.
+#
+# - When we use build.sh, we aren't doing anything particularly
+#   useful regarding image tagging. If this image was built using
+#   CI/CD (which it ought to), then the CI/CD system would
+#   typically pass in data from which you can determine suitable
+#   tags. We could just leave tagging as a concern the CI/CD
+#   environment should look after.
+#
